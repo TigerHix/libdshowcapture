@@ -27,7 +27,7 @@ class DShowCapture():
     def __init__(self):
         global lib
         if lib is None:
-            dll_path = resolve(os.path.join("vs", "2013", "x64", "Release", "dshowcapture.dll"))
+            dll_path = resolve(os.path.join("vs", "2013", "x64", "Release", "dshowcapture_x64.dll"))
             lib = cdll.LoadLibrary(dll_path)
             lib.create_capture.restype = c_void_p
             lib.get_devices.argtypes = [c_void_p]

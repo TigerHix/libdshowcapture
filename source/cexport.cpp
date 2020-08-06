@@ -16,7 +16,7 @@ struct Context {
     int capturing;
     int debug;
     unsigned char *buffer;
-    int size;
+    size_t size;
 };
 
 static int initialized = 0;
@@ -40,7 +40,7 @@ void DSHOWCAPTURE_EXPORT *create_capture() {
 int DSHOWCAPTURE_EXPORT get_devices(void *cap) {
     Context *context = (Context*)cap;
     Device::EnumVideoDevices(context->devices);
-    return context->devices.size();
+    return (int)context->devices.size();
 }
 
 // https://stackoverflow.com/a/52488521
@@ -51,9 +51,9 @@ std::string WidestringToString(std::wstring wstr)
         return std::string();
     }
 #if defined WIN32
-    int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], wstr.size(), NULL, 0, NULL, NULL);
+    int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
     std::string ret = std::string(size, 0);
-    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], wstr.size(), &ret[0], size, NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], (int)wstr.size(), &ret[0], size, NULL, NULL);
 #else
     size_t size = 0;
     _locale_t lc = _create_locale(LC_ALL, "en_US.UTF-8");
@@ -70,18 +70,19 @@ void DSHOWCAPTURE_EXPORT get_device(void *cap, int n, char *name, int len) {
     Context *context = (Context*)cap;
     strncpy(name, WidestringToString(context->devices[n].name).c_str(), len);
 }
-void DSHOWCAPTURE_EXPORT open_dialog(void *cap) {
-}
+/*void DSHOWCAPTURE_EXPORT open_dialog(void *cap) {
+    Context *context = (Context*)cap;
+}*/
 
 void capture_callback(const VideoConfig &config, unsigned char *data,
     size_t size, long long startTime, long long stopTime,
     long rotation) {
     Context *context = (Context*)config.context;
-    float start = (float)startTime / 10000000.;
-    float stop = (float)stopTime / 10000000.;
+    float start = (float)startTime / 10000000.f;
+    float stop = (float)stopTime / 10000000.f;
     if (context->debug == 2)
         cerr << "[Size: " << size << " Start: " << start << " End: " << stop << " Rotation: " << rotation << "]\n";
-    if (size != config.cx * abs(config.cy_abs) * 4)
+    if (size != (size_t)config.cx * abs(config.cy_abs) * 4)
         return;
     if (context->debug == 1)
         cerr << "[Size: " << size << " Start: " << start << " End: " << stop << " Rotation: " << rotation << "]\n";
@@ -109,50 +110,71 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
 
     VideoDevice dev = context->devices[n];
     int best_match = -1;
-    int best_dx = 0;
-    int best_dy = 0;
+    int best_width = width;
+    int best_height = height;
+    float aspect = (float)width / (float)height;
+    long long unit = 10000000;
+    long long interval = unit / fps;
+    long long best_interval = interval;
     unsigned int score = 0xffffffff;
-    for (int i = 0; i < dev.caps.size(); i++) {
-        if (dev.caps[i].minCX <= width && dev.caps[i].maxCX >= width && dev.caps[i].minCY <= height && dev.caps[i].maxCY >= height) {
-            best_match = i;
-            break;
-        }
+    for (size_t i = 0; i < dev.caps.size(); i++) {
         int dx = 0;
-        if (dev.caps[i].minCX > width)
-            dx = dev.caps[i].minCX - width;
-        if (dev.caps[i].maxCX < width)
-            dx = width - dev.caps[i].maxCX;
-        dx = dx * dx;
         int dy = 0;
+        int this_width = width;
+        int this_height = width;
+
+        if (dev.caps[i].minCX > width)
+            this_width = dev.caps[i].minCX;
+        if (dev.caps[i].maxCX < width)
+            this_width = dev.caps[i].maxCX;
         if (dev.caps[i].minCY > height)
-            dy = dev.caps[i].minCY - height;
+            this_height = dev.caps[i].minCY;
         if (dev.caps[i].maxCY < height)
-            dy = height - dev.caps[i].maxCY;
+            this_height = dev.caps[i].maxCY;
+
+        dx = width - this_width;
+        dx = dx * dx;
+        dy = height - this_height;
         dy = dy * dy;
-        int mismatch = dx + dy;
+
+        if (dx < dy) {
+            this_height = (int)(this_width / aspect + 0.5);
+            if (dev.caps[i].minCY > this_height)
+                this_height = dev.caps[i].minCY;
+            if (dev.caps[i].maxCY < this_height)
+                this_height = dev.caps[i].maxCY;
+        } else {
+            this_width = (int)(this_height * aspect + 0.5);
+            if (dev.caps[i].minCY > this_height)
+                this_width = dev.caps[i].minCY;
+            if (dev.caps[i].maxCY < this_height)
+                this_width = dev.caps[i].maxCY;
+        }
+
+        unsigned int mismatch = (width * height) - (this_width * this_height);
+        mismatch = mismatch * mismatch;
+
         if (mismatch < score) {
             score = mismatch;
-            best_match = i;
-            best_dx = dx;
-            best_dy = dy;
+            best_match = (int)i;
+            best_width = this_width;
+            best_height = this_height;
+            best_interval = dev.caps[best_match].minInterval; /*interval;
+            if (interval < dev.caps[best_match].minInterval)
+                best_interval = dev.caps[best_match].minInterval;
+            if (interval > dev.caps[best_match].maxInterval)
+                best_interval = dev.caps[best_match].maxInterval;*/
+            int di = (int)abs(interval - best_interval);
+            score += di;
         }
-    }
-
-    int unit = 10000000;
-    int interval = unit / fps;
-    if (best_match >= -1) {
-        if (interval < dev.caps[best_match].minInterval)
-            interval = dev.caps[best_match].minInterval;
-        if (interval > dev.caps[best_match].maxInterval)
-            interval = dev.caps[best_match].maxInterval;
     }
 
     context->config.context = cap;
     context->config.callback = capture_callback;
-    context->config.cx = width;
-    context->config.cy_abs = height;
+    context->config.cx = best_width;
+    context->config.cy_abs = best_height;
     context->config.cy_flip = false;
-    context->config.frameInterval = interval;
+    context->config.frameInterval = best_interval;
     context->config.format = VideoFormat::XRGB;
     context->config.internalFormat = VideoFormat::XRGB;
     context->config.useDefaultConfig = false;
@@ -191,7 +213,7 @@ int DSHOWCAPTURE_EXPORT get_height(void *cap) {
 }
 int DSHOWCAPTURE_EXPORT get_fps(void *cap) {
     Context *context = (Context*)cap;
-    return 10000000 / context->config.frameInterval;
+    return (int)(10000000 / context->config.frameInterval);
 }
 int DSHOWCAPTURE_EXPORT get_flipped(void *cap) {
     Context *context = (Context*)cap;
@@ -208,7 +230,7 @@ int DSHOWCAPTURE_EXPORT get_frame(void *cap, int timeout, unsigned char *buffer,
     if (WaitForSingleObject(context->readReady, timeout) != WAIT_OBJECT_0)
         return 0;
     EnterCriticalSection(&context->busy);
-    if (context->size != size) {
+    if (context->size != (size_t)size) {
         return 0;
         LeaveCriticalSection(&context->busy);
     }
@@ -250,9 +272,9 @@ void DSHOWCAPTURE_EXPORT lib_test(int n, int width, int height, int fps) {
 
     Context *context = (Context*)cap;
     context->debug = 1;
-    for (int i = 0; i < context->devices[n].caps.size(); i++) {
-        VideoInfo cap = context->devices[n].caps[i];
-        cout << "Caps " << i << ": XRange: " << cap.minCX << "-" << cap.maxCX << " YRange: " << cap.minCY << "-" << cap.maxCY << " IRange: " << cap.minInterval << "-" << cap.maxInterval << " Format: " << (int)cap.format << "\n";
+    for (size_t i = 0; i < context->devices[n].caps.size(); i++) {
+        VideoInfo caps = context->devices[n].caps[i];
+        cout << "Caps " << i << ": XRange: " << caps.minCX << "-" << caps.maxCX << " YRange: " << caps.minCY << "-" << caps.maxCY << " IRange: " << caps.minInterval << "-" << caps.maxInterval << " Format: " << (int)caps.format << "\n";
     }
 
     cout << "Start: " << capture_device(cap, n, width, height, fps) << "\n";

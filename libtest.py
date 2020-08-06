@@ -10,7 +10,7 @@ def resolve(name):
 lib = None
 
 def init():
-    dll_path = resolve(os.path.join("vs", "2013", "x64", "Release", "dshowcapture.dll"))
+    dll_path = resolve(os.path.join("vs", "2013", "x64", "Release", "dshowcapture_x64.dll"))
     lib = cdll.LoadLibrary(dll_path)
     cam = 0
     width = 1280

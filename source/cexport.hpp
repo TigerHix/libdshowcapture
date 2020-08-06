@@ -4,7 +4,7 @@ extern "C" {
     void DSHOWCAPTURE_EXPORT *create_capture();
     int DSHOWCAPTURE_EXPORT get_devices(void *cap);
     void DSHOWCAPTURE_EXPORT get_device(void *cap, int n, char *name, int len);
-    void DSHOWCAPTURE_EXPORT open_dialog(void *cap);
+    //void DSHOWCAPTURE_EXPORT open_dialog(void *cap);
     int DSHOWCAPTURE_EXPORT get_width(void *cap);
     int DSHOWCAPTURE_EXPORT get_height(void *cap);
     int DSHOWCAPTURE_EXPORT get_fps(void *cap);
