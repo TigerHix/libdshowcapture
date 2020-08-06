@@ -535,7 +535,7 @@ bool EnumDevices(const GUID &type, EnumDeviceCallback callback, void *param)
 			      CLSCTX_INPROC_SERVER, IID_ICreateDevEnum,
 			      (void **)&deviceEnum);
 	if (FAILED(hr)) {
-		WarningHR(L"EnumAudioDevices: Could not create "
+		WarningHR(L"EnumDevices: Could not create "
 			  L"ICreateDeviceEnum",
 			  hr);
 		return false;
@@ -543,7 +543,7 @@ bool EnumDevices(const GUID &type, EnumDeviceCallback callback, void *param)
 
 	hr = deviceEnum->CreateClassEnumerator(type, &enumMoniker, 0);
 	if (FAILED(hr)) {
-		WarningHR(L"EnumAudioDevices: CreateClassEnumerator failed",
+		WarningHR(L"EnumDevices: CreateClassEnumerator failed",
 			  hr);
 		return false;
 	}

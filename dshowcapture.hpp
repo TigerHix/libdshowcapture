@@ -176,6 +176,8 @@ struct VideoConfig : Config {
 
 	/** Desired video format. */
 	VideoFormat format = VideoFormat::Any;
+
+    void *context;
 };
 
 struct AudioConfig : Config {
