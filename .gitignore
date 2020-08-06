@@ -45,3 +45,8 @@ tags
 *.lnk
 *.chm
 *~
+/.vs/ProjectSettings.json
+/.vs/slnx.sqlite
+/.vs/VSWorkspaceState.json
+/vs/2013/.vs/dshowcapture/v15/Browse.VC.db
+/vs/2013/.vs/dshowcapture/v15/Browse.VC.opendb
