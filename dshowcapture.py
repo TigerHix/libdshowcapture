@@ -33,6 +33,7 @@ class DShowCapture():
             lib.get_devices.argtypes = [c_void_p]
             lib.get_device.argtypes = [c_void_p, c_int, c_char_p, c_int]
             lib.capture_device.argtypes = [c_void_p, c_int, c_int, c_int, c_int]
+            lib.capture_device_default.argtypes = [c_void_p, c_int]
             lib.get_width.argtypes = [c_void_p]
             lib.get_height.argtypes = [c_void_p]
             lib.get_fps.argtypes = [c_void_p]
@@ -62,6 +63,16 @@ class DShowCapture():
 
     def capture_device(self, cam, width, height, fps):
         ret = self.lib.capture_device(self.cap, cam, width, height, fps) == 1
+        if ret:
+            self.width = self.get_width()
+            self.height = self.get_height()
+            self.flipped = self.get_flipped()
+            self.size = self.width * self.height * 4
+            self.buffer = create_frame_buffer(self.width, self.height)
+        return ret;
+
+    def capture_device_default(self, cam):
+        ret = self.lib.capture_device_default(self.cap, cam) == 1
         if ret:
             self.width = self.get_width()
             self.height = self.get_height()
@@ -126,6 +137,7 @@ if __name__ == "__main__":
         print(f"{i} {cap.get_device(i)}")
 
     print(f"Capturing: {cap.capture_device(cam, width, height, fps)}")
+    #print(f"Capturing: {cap.capture_device_default(cam)}")
     width = cap.get_width()
     height = cap.get_height()
     flipped = cap.get_flipped()

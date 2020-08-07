@@ -301,7 +301,7 @@ bool HDevice::SetupVideoCapture(IBaseFilter *filter, VideoConfig &config)
 
 		ConvertVideoSettings();
 
-		config.format = config.internalFormat = VideoFormat::Any;
+		config.internalFormat = VideoFormat::Any;
 	}
 
 	if (!GetClosestVideoMediaType(filter, config, videoMediaType)) {

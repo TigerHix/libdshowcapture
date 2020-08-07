@@ -100,8 +100,44 @@ void capture_callback(const VideoConfig &config, unsigned char *data,
     SetEvent(context->readReady);
 }
 
+int DSHOWCAPTURE_EXPORT capture_device_default(void *cap, int n) {
+    Context *context = (Context*)cap;
+    if (context->devices.size() < 1)
+        get_devices(cap);
+
+    context->config.name = context->devices[n].name.c_str();
+    context->config.path = context->devices[n].path.c_str();
+    context->config.context = cap;
+    context->config.callback = capture_callback;
+    context->config.format = VideoFormat::XRGB;
+    context->config.useDefaultConfig = true;
+    context->capturing = 0;
+    if (!context->device.ResetGraph())
+        return 0;
+    if (!context->device.Valid())
+        return 0;
+    if (!context->device.SetVideoConfig(&context->config)) {
+        return 0;
+    }
+    if (!context->device.Valid())
+        return 0;
+    if (!context->device.ConnectFilters())
+        return 0;
+    if (!context->device.Valid())
+        return 0;
+    context->capturing = context->device.Start() == Result::Success;
+    if (context->capturing && context->config.format != VideoFormat::XRGB) {
+        context->device.Stop();
+        context->capturing = 0;
+        return 0;
+    }
+    SetEvent(context->writeReady);
+    return context->capturing;
+}
+
 int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, int fps) {
     Context *context = (Context*)cap;
+    int ret = 1;
     if (context->devices.size() < 1)
         get_devices(cap);
 
@@ -179,29 +215,33 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
     context->config.internalFormat = VideoFormat::XRGB;
     context->config.useDefaultConfig = false;
     context->capturing = 0;
-    if (!context->device.ResetGraph())
-        return 0;
-    if (!context->device.Valid())
-        return 0;
-    if (!context->device.SetVideoConfig(&context->config)) {
+    if (ret && !context->device.ResetGraph())
+        ret = 0;
+    if (ret && !context->device.Valid())
+        ret = 0;
+    if (ret && !context->device.SetVideoConfig(&context->config)) {
         context->config.internalFormat = VideoFormat::Any;
         if (!context->device.SetVideoConfig(&context->config))
-            return 0;
+            ret = 0;
     }
-    if (!context->device.Valid())
-        return 0;
-    if (!context->device.ConnectFilters())
-        return 0;
-    if (!context->device.Valid())
-        return 0;
-    context->capturing = context->device.Start() == Result::Success;
-    if (context->capturing && context->config.format != VideoFormat::XRGB) {
-        context->device.Stop();
-        context->capturing = 0;
-        return 0;
+    if (ret && !context->device.Valid())
+        ret = 0;
+    if (ret && !context->device.ConnectFilters())
+        ret = 0;
+    if (ret && !context->device.Valid())
+        ret = 0;
+    if (ret) {
+        context->capturing = context->device.Start() == Result::Success;
+        if (context->capturing && context->config.format != VideoFormat::XRGB) {
+            context->device.Stop();
+            context->capturing = 0;
+            ret = 0;
+        }
+        SetEvent(context->writeReady);
+        return context->capturing;
+    } else {
+        return capture_device_default(cap, n);
     }
-    SetEvent(context->writeReady);
-    return context->capturing;
 }
 int DSHOWCAPTURE_EXPORT get_width(void *cap) {
     Context *context = (Context*)cap;
