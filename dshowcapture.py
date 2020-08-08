@@ -38,6 +38,7 @@ class DShowCapture():
             lib.get_fps.argtypes = [c_void_p]
             lib.get_flipped.argtypes = [c_void_p]
             lib.get_colorspace.argtypes = [c_void_p]
+            lib.capturing.argtypes = [c_void_p]
             lib.get_frame.argtypes = [c_void_p, c_int, c_char_p, c_int]
             lib.get_size.argtypes = [c_void_p]
             lib.stop_capture.argtypes = [c_void_p]
@@ -111,6 +112,9 @@ class DShowCapture():
 
     def get_colorspace(self):
         return self.lib.get_colorspace(self.cap)
+
+    def capturing(self):
+        return self.lib.capturing(self.cap) == 1
 
     def get_frame(self, timeout):
         if self.size is None:

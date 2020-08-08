@@ -179,19 +179,23 @@ static inline void ClampToGranularity(LONG &val, int minVal, int granularity)
 static inline int GetFormatRating(VideoFormat format)
 {
     if (format >= VideoFormat::XRGB)
-        return 1;
-    else if (format >= VideoFormat::ARGB)
         return 0;
+    else if (format >= VideoFormat::ARGB)
+        return 1;
     else if (format == VideoFormat::Y800)
         return 12;
-	else if (format >= VideoFormat::I420 && format < VideoFormat::YVYU)
-		return 2;
-	else if (format >= VideoFormat::YVYU && format < VideoFormat::MJPEG)
-		return 5;
-	else if (format == VideoFormat::MJPEG)
-		return 10;
+    else if (format == VideoFormat::HDYC)
+        return 15;
+    else if (format >= VideoFormat::I420 && format <= VideoFormat::YV12)
+        return 2;
+    else if (format >= VideoFormat::YVYU && format <= VideoFormat::UYVY)
+        return 5;
+    else if (format == VideoFormat::MJPEG)
+        return 10;
+    else if (format == VideoFormat::H264)
+        return 11;
 
-	return 15;
+    return 15;
 }
 
 static bool ClosestVideoMTCallback(ClosestVideoData &data,

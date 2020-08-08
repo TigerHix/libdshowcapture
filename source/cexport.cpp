@@ -133,6 +133,28 @@ int DSHOWCAPTURE_EXPORT capture_device_default(void *cap, int n) {
     return context->capturing;
 }
 
+static inline int GetFormatRating(VideoFormat format)
+{
+    if (format >= VideoFormat::XRGB)
+        return 0;
+    else if (format >= VideoFormat::ARGB)
+        return 1;
+    else if (format == VideoFormat::Y800)
+        return 12;
+    else if (format == VideoFormat::HDYC)
+        return 15;
+    else if (format >= VideoFormat::I420 && format <= VideoFormat::YV12)
+        return 2;
+    else if (format >= VideoFormat::YVYU && format <= VideoFormat::UYVY)
+        return 5;
+    else if (format == VideoFormat::MJPEG)
+        return 10;
+    else if (format == VideoFormat::H264)
+        return 11;
+
+    return 15;
+}
+
 int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, int fps) {
     Context *context = (Context*)cap;
     int ret = 1;
@@ -146,6 +168,7 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
     int best_match = -1;
     int best_width = width;
     int best_height = height;
+    VideoFormat best_format = VideoFormat::XRGB;
     float aspect = (float)width / (float)height;
     long long unit = 10000000;
     long long interval = unit / fps;
@@ -197,18 +220,19 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
         unsigned int mismatch = (width * height) - (this_width * this_height);
         mismatch = mismatch * mismatch;
 
-        if (mismatch < score) {
+        int format_rating = GetFormatRating(dev.caps[i].format);
+        if (mismatch < score && format_rating < 15) {
             score = mismatch;
             best_match = (int)i;
             best_width = this_width;
             best_height = this_height;
-            best_interval = interval;
-            if (interval < dev.caps[best_match].minInterval)
-                best_interval = dev.caps[best_match].minInterval;
-            if (interval > dev.caps[best_match].maxInterval)
-                best_interval = dev.caps[best_match].maxInterval;
+            best_format = dev.caps[i].format;
+            if (best_interval < dev.caps[i].minInterval)
+                best_interval = dev.caps[i].minInterval;
+            if (best_interval > dev.caps[i].maxInterval)
+                best_interval = dev.caps[i].maxInterval;
             int di = (int)abs(interval - best_interval);
-            score += di;
+            score += di * 10 + format_rating;
         }
     }
 
@@ -218,24 +242,21 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
     context->config.cy_abs = best_height;
     context->config.cy_flip = false;
     context->config.frameInterval = best_interval;
-    cout << "Camera configuration: " << best_width << "x" << best_height << " " << best_interval << "\n";
+    cout << "Camera configuration: " << best_width << "x" << best_height << " " << best_interval << " " << (int)best_format << "\n";
     context->config.format = VideoFormat::XRGB;
-    context->config.internalFormat = VideoFormat::XRGB;
+    context->config.internalFormat = best_format;
     context->config.useDefaultConfig = false;
     context->capturing = 0;
     if (ret && !context->device.ResetGraph())
         ret = 0;
     if (ret && !context->device.Valid())
         ret = 0;
-    if (ret && !context->device.SetVideoConfig(&context->config)) {
+    if (ret && (!context->device.SetVideoConfig(&context->config) || !context->device.Valid() || !context->device.ConnectFilters())) {
+        cout << "Retrying with any format\n";
         context->config.internalFormat = VideoFormat::Any;
-        if (!context->device.SetVideoConfig(&context->config))
+        if (!context->device.SetVideoConfig(&context->config) || !context->device.Valid() || !context->device.ConnectFilters())
             ret = 0;
     }
-    if (ret && !context->device.Valid())
-        ret = 0;
-    if (ret && !context->device.ConnectFilters())
-        ret = 0;
     if (ret && !context->device.Valid())
         ret = 0;
     if (ret) {
