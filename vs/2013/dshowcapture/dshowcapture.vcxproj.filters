@@ -101,7 +101,7 @@
     <ClInclude Include="..\..\..\source\ComPtr.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="cexport.hpp">
+    <ClInclude Include="..\..\..\source\cexport.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

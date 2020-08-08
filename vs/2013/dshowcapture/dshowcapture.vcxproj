@@ -169,6 +169,7 @@
   <ItemGroup>
     <ClInclude Include="..\..\..\dshowcapture.hpp" />
     <ClInclude Include="..\..\..\source\capture-filter.hpp" />
+    <ClInclude Include="..\..\..\source\cexport.hpp" />
     <ClInclude Include="..\..\..\source\ComPtr.hpp" />
     <ClInclude Include="..\..\..\source\device.hpp" />
     <ClInclude Include="..\..\..\source\dshow-base.hpp" />
@@ -181,7 +182,6 @@
     <ClInclude Include="..\..\..\source\IVideoCaptureFilter.h" />
     <ClInclude Include="..\..\..\source\log.hpp" />
     <ClInclude Include="..\..\..\source\output-filter.hpp" />
-    <ClInclude Include="cexport.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

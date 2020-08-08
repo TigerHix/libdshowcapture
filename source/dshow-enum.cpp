@@ -178,8 +178,14 @@ static inline void ClampToGranularity(LONG &val, int minVal, int granularity)
 
 static inline int GetFormatRating(VideoFormat format)
 {
-	if (format >= VideoFormat::I420 && format < VideoFormat::YVYU)
-		return 0;
+    if (format >= VideoFormat::XRGB)
+        return 1;
+    else if (format >= VideoFormat::ARGB)
+        return 0;
+    else if (format == VideoFormat::Y800)
+        return 12;
+	else if (format >= VideoFormat::I420 && format < VideoFormat::YVYU)
+		return 2;
 	else if (format >= VideoFormat::YVYU && format < VideoFormat::MJPEG)
 		return 5;
 	else if (format == VideoFormat::MJPEG)
@@ -235,7 +241,7 @@ static bool ClosestVideoMTCallback(ClosestVideoData &data,
 
 	long long totalVal = frameVal + yVal + xVal + formatVal;
 
-	if (!data.found || data.bestVal > totalVal) {
+	if (info.format != VideoFormat::HDYC && (!data.found || data.bestVal > totalVal)) {
 		if (xVal == 0) {
 			bmih->biWidth = data.config.cx;
 			ClampToGranularity(bmih->biWidth, info.minCX,

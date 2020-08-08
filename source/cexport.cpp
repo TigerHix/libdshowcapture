@@ -10,7 +10,6 @@ struct Context {
     Device device;
     std::vector<VideoDevice> devices;
     VideoConfig config;
-    HANDLE writeReady;
     HANDLE readReady;
     CRITICAL_SECTION busy;
     int capturing;
@@ -27,10 +26,8 @@ void DSHOWCAPTURE_EXPORT *create_capture() {
         initialized = 1;
     }
     Context *context = new Context();
-    context->writeReady = CreateEventA(0, FALSE, FALSE, NULL);
     context->readReady = CreateEventA(0, FALSE, FALSE, NULL);
     InitializeCriticalSection(&context->busy);
-    SetEvent(context->writeReady);
     context->capturing = 0;
     context->debug = 0;
     context->buffer = 0;
@@ -82,14 +79,12 @@ void capture_callback(const VideoConfig &config, unsigned char *data,
     float stop = (float)stopTime / 10000000.f;
     if (context->debug == 2)
         cerr << "[Size: " << size << " Start: " << start << " End: " << stop << " Rotation: " << rotation << "]\n";
-    if (size != (size_t)config.cx * abs(config.cy_abs) * 4)
+    if (size > (size_t)config.cx * abs(config.cy_abs) * 4)
         return;
     if (context->debug == 1)
         cerr << "[Size: " << size << " Start: " << start << " End: " << stop << " Rotation: " << rotation << "]\n";
-    if (WaitForSingleObject(context->writeReady, 20) != WAIT_OBJECT_0)
-        return;
     EnterCriticalSection(&context->busy);
-    if (size != context->size) {
+    if (size > context->size) {
         if (context->buffer != 0)
             delete context->buffer;
         context->buffer = new unsigned char[size];
@@ -110,6 +105,7 @@ int DSHOWCAPTURE_EXPORT capture_device_default(void *cap, int n) {
     context->config.context = cap;
     context->config.callback = capture_callback;
     context->config.format = VideoFormat::XRGB;
+    context->config.internalFormat = VideoFormat::Any;
     context->config.useDefaultConfig = true;
     context->capturing = 0;
     if (!context->device.ResetGraph())
@@ -126,12 +122,14 @@ int DSHOWCAPTURE_EXPORT capture_device_default(void *cap, int n) {
     if (!context->device.Valid())
         return 0;
     context->capturing = context->device.Start() == Result::Success;
-    if (context->capturing && context->config.format != VideoFormat::XRGB) {
+    /*if (context->capturing && context->config.format != VideoFormat::XRGB) {
         context->device.Stop();
         context->capturing = 0;
         return 0;
-    }
-    SetEvent(context->writeReady);
+    }*/
+    long long unit = 10000000;
+    cout << "Final camera configuration: " << context->config.cx << "x" << context->config.cy_abs << " " << unit / context->config.frameInterval << "\n";
+    cout << "Format: " << (int)context->config.format << " Internal format: " << (int)context->config.internalFormat << "\n";
     return context->capturing;
 }
 
@@ -187,6 +185,15 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
                 this_width = dev.caps[i].maxCY;
         }
 
+        if (dev.caps[i].minCX > width)
+            this_width = dev.caps[i].minCX;
+        if (dev.caps[i].maxCX < width)
+            this_width = dev.caps[i].maxCX;
+        if (dev.caps[i].minCY > height)
+            this_height = dev.caps[i].minCY;
+        if (dev.caps[i].maxCY < height)
+            this_height = dev.caps[i].maxCY;
+
         unsigned int mismatch = (width * height) - (this_width * this_height);
         mismatch = mismatch * mismatch;
 
@@ -195,11 +202,11 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
             best_match = (int)i;
             best_width = this_width;
             best_height = this_height;
-            best_interval = dev.caps[best_match].minInterval; /*interval;
+            best_interval = interval;
             if (interval < dev.caps[best_match].minInterval)
                 best_interval = dev.caps[best_match].minInterval;
             if (interval > dev.caps[best_match].maxInterval)
-                best_interval = dev.caps[best_match].maxInterval;*/
+                best_interval = dev.caps[best_match].maxInterval;
             int di = (int)abs(interval - best_interval);
             score += di;
         }
@@ -211,6 +218,7 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
     context->config.cy_abs = best_height;
     context->config.cy_flip = false;
     context->config.frameInterval = best_interval;
+    cout << "Camera configuration: " << best_width << "x" << best_height << " " << best_interval << "\n";
     context->config.format = VideoFormat::XRGB;
     context->config.internalFormat = VideoFormat::XRGB;
     context->config.useDefaultConfig = false;
@@ -232,16 +240,20 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
         ret = 0;
     if (ret) {
         context->capturing = context->device.Start() == Result::Success;
-        if (context->capturing && context->config.format != VideoFormat::XRGB) {
+        cout << "Final camera configuration: " << context->config.cx << "x" << context->config.cy_abs << " " << unit / context->config.frameInterval << "\n";
+        cout << "Format: " << (int)context->config.format << " Internal format: " << (int)context->config.internalFormat << "\n";
+        /*if (context->capturing && context->config.format != VideoFormat::XRGB) {
             context->device.Stop();
             context->capturing = 0;
             ret = 0;
-        }
-        SetEvent(context->writeReady);
-        return context->capturing;
-    } else {
-        return capture_device_default(cap, n);
+        }*/
+        if (ret)
+            return context->capturing;
     }
+    cout << "Failed\n";
+    context->capturing = 0;
+    context->device.Stop();
+    return capture_device_default(cap, n);
 }
 int DSHOWCAPTURE_EXPORT get_width(void *cap) {
     Context *context = (Context*)cap;
@@ -261,7 +273,7 @@ int DSHOWCAPTURE_EXPORT get_flipped(void *cap) {
 }
 int DSHOWCAPTURE_EXPORT get_colorspace(void *cap) {
     Context *context = (Context*)cap;
-    return (int)context->config.internalFormat;
+    return (int)context->config.format;
 }
 int DSHOWCAPTURE_EXPORT get_frame(void *cap, int timeout, unsigned char *buffer, int size) {
     Context *context = (Context*)cap;
@@ -270,14 +282,17 @@ int DSHOWCAPTURE_EXPORT get_frame(void *cap, int timeout, unsigned char *buffer,
     if (WaitForSingleObject(context->readReady, timeout) != WAIT_OBJECT_0)
         return 0;
     EnterCriticalSection(&context->busy);
-    if (context->size != (size_t)size) {
-        return 0;
+    if (context->size > (size_t)size) {
         LeaveCriticalSection(&context->busy);
+        return 0;
     }
-    memcpy(buffer, context->buffer, size);
+    memcpy(buffer, context->buffer, context->size);
     LeaveCriticalSection(&context->busy);
-    SetEvent(context->writeReady);
     return 1;
+}
+int DSHOWCAPTURE_EXPORT get_size(void *cap) {
+    Context *context = (Context*)cap;
+    return (int)context->size;
 }
 void DSHOWCAPTURE_EXPORT stop_capture(void *cap) {
     Context *context = (Context*)cap;
@@ -289,7 +304,6 @@ void DSHOWCAPTURE_EXPORT destroy_capture(void *cap) {
     if (context->capturing)
         stop_capture(cap);
     CloseHandle(context->readReady);
-    CloseHandle(context->writeReady);
     DeleteCriticalSection(&context->busy);
     if (context->buffer)
         delete context->buffer;
