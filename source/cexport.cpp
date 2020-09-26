@@ -2,13 +2,15 @@
 #include "../dshowcapture.hpp"
 #include "cexport.hpp"
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 
 using namespace std;
 using namespace DShow;
 
 struct Context {
     Device device;
-    std::vector<VideoDevice> devices;
+    vector<VideoDevice> devices;
     VideoConfig config;
     HANDLE readReady;
     CRITICAL_SECTION busy;
@@ -16,6 +18,7 @@ struct Context {
     int debug;
     unsigned char *buffer;
     size_t size;
+    string json;
 };
 
 static int initialized = 0;
@@ -40,27 +43,106 @@ int DSHOWCAPTURE_EXPORT get_devices(void *cap) {
     return (int)context->devices.size();
 }
 
+string escape(string str) {
+    std::ostringstream o;
+    for (auto c = str.cbegin(); c != str.cend(); c++) {
+        if (*c == '"' || *c == '\\' || ('\x00' <= *c && *c <= '\x1f')) {
+            o << "\\u"
+                << std::hex << std::setw(4) << std::setfill('0') << (int)*c;
+        }
+        else {
+            o << *c;
+        }
+    }
+    return o.str();
+}
+
 // https://stackoverflow.com/a/52488521
-std::string WidestringToString(std::wstring wstr)
+string WidestringToString(wstring wstr)
 {
     if (wstr.empty())
     {
-        return std::string();
+        return string();
     }
 #if defined WIN32
     int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
-    std::string ret = std::string(size, 0);
+    string ret = string(size, 0);
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &wstr[0], (int)wstr.size(), &ret[0], size, NULL, NULL);
 #else
     size_t size = 0;
     _locale_t lc = _create_locale(LC_ALL, "en_US.UTF-8");
     errno_t err = _wcstombs_s_l(&size, NULL, 0, &wstr[0], _TRUNCATE, lc);
-    std::string ret = std::string(size, 0);
+    string ret = string(size, 0);
     err = _wcstombs_s_l(&size, &ret[0], size, &wstr[0], _TRUNCATE, lc);
     _free_locale(lc);
     ret.resize(size - 1);
 #endif
     return ret;
+}
+
+static inline int GetFormatRating(VideoFormat format)
+{
+    if (format == VideoFormat::XRGB)
+        return 0;
+    else if (format == VideoFormat::ARGB)
+        return 1;
+    else if (format == VideoFormat::Y800)
+        return 12;
+    else if (format == VideoFormat::HDYC)
+        return 15;
+    else if (format >= VideoFormat::I420 && format <= VideoFormat::YV12)
+        return 5;
+    else if (format >= VideoFormat::YVYU && format <= VideoFormat::UYVY)
+        return 2;
+    else if (format == VideoFormat::MJPEG)
+        return 10;
+    else if (format == VideoFormat::H264)
+        return 15;
+
+    return 15;
+}
+
+int DSHOWCAPTURE_EXPORT get_json_length(void *cap) {
+    Context *context = (Context*)cap;
+    Device::EnumVideoDevices(context->devices);
+
+    ostringstream ss;
+    ss << "[";
+    for (size_t dev = 0; dev < context->devices.size(); dev++) {
+        if (dev > 0)
+            ss << ",";
+        ss << "{\"id\": " << dev << ",";
+        ss << "\"name\": \"" << escape(WidestringToString(context->devices[dev].name)) << "\",";
+        ss << "\"path\": \"" << escape(WidestringToString(context->devices[dev].path)) << "\",";
+        ss << "\"caps\": [";
+        for (size_t dcap = 0; dcap < context->devices[dev].caps.size(); dcap++) {
+            if (GetFormatRating(context->devices[dev].caps[dcap].format) >= 15)
+                continue;
+            if (dcap > 0)
+                ss << ",";
+            ss << "{";
+            ss << "\"id\": " << dcap << ",";
+            ss << "\"minCX\": " << context->devices[dev].caps[dcap].minCX << ",";
+            ss << "\"minCY\": " << abs(context->devices[dev].caps[dcap].minCY) << ",";
+            ss << "\"maxCX\": " << context->devices[dev].caps[dcap].maxCX << ",";
+            ss << "\"maxCY\": " << abs(context->devices[dev].caps[dcap].maxCY) << ",";
+            ss << "\"granularityCX\": " << context->devices[dev].caps[dcap].granularityCX << ",";
+            ss << "\"granularityCY\": " << abs(context->devices[dev].caps[dcap].granularityCY) << ",";
+            ss << "\"minInterval\": " << context->devices[dev].caps[dcap].minInterval << ",";
+            ss << "\"maxInterval\": " << context->devices[dev].caps[dcap].maxInterval << ",";
+            ss << "\"format\": " << (int)(context->devices[dev].caps[dcap].format);
+            ss << "}";
+        }
+        ss << "]}";
+    }
+    ss << "]";
+    context->json = ss.str();
+    return (int)context->json.length();
+}
+
+void DSHOWCAPTURE_EXPORT get_json(void *cap, char *buffer, int len) {
+    Context *context = (Context*)cap;
+    strncpy(buffer, context->json.c_str(), len);
 }
 
 void DSHOWCAPTURE_EXPORT get_device(void *cap, int n, char *name, int len) {
@@ -104,16 +186,31 @@ int DSHOWCAPTURE_EXPORT capture_device_default(void *cap, int n) {
     context->config.path = context->devices[n].path.c_str();
     context->config.context = cap;
     context->config.callback = capture_callback;
-    context->config.format = VideoFormat::XRGB;
+    context->config.format = VideoFormat::Any;
     context->config.internalFormat = VideoFormat::Any;
+    context->config.cx = 0;
+    context->config.cy_abs = 0;
+    context->config.cy_flip = false;
+    context->config.frameInterval = 0;
     context->config.useDefaultConfig = true;
     context->capturing = 0;
+
+    VideoConfig config = context->config;
+
     if (!context->device.ResetGraph())
         return 0;
     if (!context->device.Valid())
         return 0;
     if (!context->device.SetVideoConfig(&context->config)) {
         return 0;
+    }
+    if (context->config.internalFormat > VideoFormat::MJPEG) {
+        cout << "Detected unsupported encoded format " << (int)context->config.internalFormat << ", trying to downgrade to MJPEG\n\n";
+        context->config = config;
+        context->config.internalFormat = VideoFormat::MJPEG;
+        if (!context->device.SetVideoConfig(&context->config)) {
+            return 0;
+        }
     }
     if (!context->device.Valid())
         return 0;
@@ -122,37 +219,95 @@ int DSHOWCAPTURE_EXPORT capture_device_default(void *cap, int n) {
     if (!context->device.Valid())
         return 0;
     context->capturing = context->device.Start() == Result::Success;
-    /*if (context->capturing && context->config.format != VideoFormat::XRGB) {
-        context->device.Stop();
-        context->capturing = 0;
-        return 0;
-    }*/
     long long unit = 10000000;
     cout << "Final camera configuration: " << context->config.cx << "x" << context->config.cy_abs << " " << unit / context->config.frameInterval << "\n";
     cout << "Format: " << (int)context->config.format << " Internal format: " << (int)context->config.internalFormat << "\n";
     return context->capturing;
 }
 
-static inline int GetFormatRating(VideoFormat format)
+static inline void ClampToGranularity(int &val, int minVal, int granularity)
 {
-    if (format >= VideoFormat::XRGB)
-        return 0;
-    else if (format >= VideoFormat::ARGB)
-        return 1;
-    else if (format == VideoFormat::Y800)
-        return 12;
-    else if (format == VideoFormat::HDYC)
-        return 15;
-    else if (format >= VideoFormat::I420 && format <= VideoFormat::YV12)
-        return 2;
-    else if (format >= VideoFormat::YVYU && format <= VideoFormat::UYVY)
-        return 5;
-    else if (format == VideoFormat::MJPEG)
-        return 10;
-    else if (format == VideoFormat::H264)
-        return 11;
+    val -= ((val - minVal) % granularity);
+}
 
-    return 15;
+int DSHOWCAPTURE_EXPORT capture_device_by_dcap(void *cap, int n, int dcap, int cx, int cy, long long interval) {
+    Context *context = (Context*)cap;
+    if (context->devices.size() < 1)
+        get_devices(cap);
+
+    if (context->devices.size() <= n) {
+        cout << "Invalid device number " << n << "\n";
+        return 0;
+    }
+    if (context->devices[n].caps.size() <= dcap) {
+        cout << "Invalid device capability number " << dcap << "\n";
+        return 0;
+    }
+
+    ClampToGranularity(cx, context->devices[n].caps[dcap].minCX, context->devices[n].caps[dcap].granularityCX);
+    int cy_abs = abs(cy);
+    ClampToGranularity(cy_abs, abs(context->devices[n].caps[dcap].minCY), abs(context->devices[n].caps[dcap].granularityCY));
+
+    if (cx < context->devices[n].caps[dcap].minCX)
+        cx = context->devices[n].caps[dcap].minCX;
+    if (cx > context->devices[n].caps[dcap].maxCX)
+        cx = context->devices[n].caps[dcap].maxCX;
+
+    if (cy_abs < abs(context->devices[n].caps[dcap].minCY))
+        cy_abs = abs(context->devices[n].caps[dcap].minCY);
+    if (cy_abs > abs(context->devices[n].caps[dcap].maxCY))
+        cy_abs = abs(context->devices[n].caps[dcap].maxCY);
+
+    if (interval < context->devices[n].caps[dcap].minInterval)
+        interval = context->devices[n].caps[dcap].minInterval;
+    if (interval > context->devices[n].caps[dcap].maxInterval)
+        interval = context->devices[n].caps[dcap].maxInterval;
+
+    int flip = 0;
+    if (context->devices[n].caps[dcap].minCY < 0 || context->devices[n].caps[dcap].maxCY < 0)
+        flip = 1;
+
+    context->config.name = context->devices[n].name.c_str();
+    context->config.path = context->devices[n].path.c_str();
+    context->config.context = cap;
+    context->config.callback = capture_callback;
+    context->config.format = VideoFormat::Any;
+    context->config.internalFormat = context->devices[n].caps[dcap].format;
+    context->config.cx = cx;
+    context->config.cy_abs = cy_abs;
+    context->config.cy_flip = flip;
+    context->config.frameInterval = interval;
+    context->config.useDefaultConfig = false;
+    context->capturing = 0;
+
+    VideoConfig config = context->config;
+
+    if (!context->device.ResetGraph())
+        return 0;
+    if (!context->device.Valid())
+        return 0;
+    if (!context->device.SetVideoConfig(&context->config)) {
+        return 0;
+    }
+    if (context->config.internalFormat > VideoFormat::MJPEG) {
+        cout << "Detected unsupported encoded format " << (int)context->config.internalFormat << ", trying to downgrade to MJPEG\n\n";
+        context->config = config;
+        context->config.internalFormat = VideoFormat::MJPEG;
+        if (!context->device.SetVideoConfig(&context->config)) {
+            return 0;
+        }
+    }
+    if (!context->device.Valid())
+        return 0;
+    if (!context->device.ConnectFilters())
+        return 0;
+    if (!context->device.Valid())
+        return 0;
+    context->capturing = context->device.Start() == Result::Success;
+    long long unit = 10000000;
+    cout << "Final camera configuration: " << context->config.cx << "x" << context->config.cy_abs << " " << unit / context->config.frameInterval << "\n";
+    cout << "Format: " << (int)context->config.format << " Internal format: " << (int)context->config.internalFormat << "\n";
+    return context->capturing;
 }
 
 int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, int fps) {
@@ -243,7 +398,7 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
     context->config.cy_flip = false;
     context->config.frameInterval = best_interval;
     cout << "Camera configuration: " << best_width << "x" << best_height << " " << best_interval << " " << (int)best_format << "\n";
-    context->config.format = VideoFormat::XRGB;
+    context->config.format = VideoFormat::Any;
     context->config.internalFormat = best_format;
     context->config.useDefaultConfig = false;
     context->capturing = 0;
@@ -263,11 +418,6 @@ int DSHOWCAPTURE_EXPORT capture_device(void *cap, int n, int width, int height, 
         context->capturing = context->device.Start() == Result::Success;
         cout << "Final camera configuration: " << context->config.cx << "x" << context->config.cy_abs << " " << unit / context->config.frameInterval << "\n";
         cout << "Format: " << (int)context->config.format << " Internal format: " << (int)context->config.internalFormat << "\n";
-        /*if (context->capturing && context->config.format != VideoFormat::XRGB) {
-            context->device.Stop();
-            context->capturing = 0;
-            ret = 0;
-        }*/
         if (ret)
             return context->capturing;
     }
@@ -286,6 +436,8 @@ int DSHOWCAPTURE_EXPORT get_height(void *cap) {
 }
 int DSHOWCAPTURE_EXPORT get_fps(void *cap) {
     Context *context = (Context*)cap;
+    if (context->config.frameInterval == 0)
+        return 1;
     return (int)(10000000 / context->config.frameInterval);
 }
 int DSHOWCAPTURE_EXPORT get_flipped(void *cap) {
@@ -295,6 +447,10 @@ int DSHOWCAPTURE_EXPORT get_flipped(void *cap) {
 int DSHOWCAPTURE_EXPORT get_colorspace(void *cap) {
     Context *context = (Context*)cap;
     return (int)context->config.format;
+}
+int DSHOWCAPTURE_EXPORT get_colorspace_internal(void *cap) {
+    Context *context = (Context*)cap;
+    return (int)context->config.internalFormat;
 }
 int DSHOWCAPTURE_EXPORT get_frame(void *cap, int timeout, unsigned char *buffer, int size) {
     Context *context = (Context*)cap;
@@ -309,7 +465,7 @@ int DSHOWCAPTURE_EXPORT get_frame(void *cap, int timeout, unsigned char *buffer,
     }
     memcpy(buffer, context->buffer, context->size);
     LeaveCriticalSection(&context->busy);
-    return 1;
+    return context->size;
 }
 int DSHOWCAPTURE_EXPORT get_size(void *cap) {
     Context *context = (Context*)cap;
