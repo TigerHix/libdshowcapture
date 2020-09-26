@@ -116,7 +116,8 @@ int DSHOWCAPTURE_EXPORT get_json_length(void *cap) {
         ss << "\"path\": \"" << escape(WidestringToString(context->devices[dev].path)) << "\",";
         ss << "\"caps\": [";
         for (size_t dcap = 0; dcap < context->devices[dev].caps.size(); dcap++) {
-            if (GetFormatRating(context->devices[dev].caps[dcap].format) >= 15)
+            int rating = GetFormatRating(context->devices[dev].caps[dcap].format);
+            if (rating >= 15)
                 continue;
             if (dcap > 0)
                 ss << ",";
@@ -130,6 +131,7 @@ int DSHOWCAPTURE_EXPORT get_json_length(void *cap) {
             ss << "\"granularityCY\": " << abs(context->devices[dev].caps[dcap].granularityCY) << ",";
             ss << "\"minInterval\": " << context->devices[dev].caps[dcap].minInterval << ",";
             ss << "\"maxInterval\": " << context->devices[dev].caps[dcap].maxInterval << ",";
+            ss << "\"rating\": " << rating << ",";
             ss << "\"format\": " << (int)(context->devices[dev].caps[dcap].format);
             ss << "}";
         }
@@ -235,11 +237,11 @@ int DSHOWCAPTURE_EXPORT capture_device_by_dcap(void *cap, int n, int dcap, int c
     if (context->devices.size() < 1)
         get_devices(cap);
 
-    if (context->devices.size() <= n) {
+    if (context->devices.size() <= (unsigned int)n) {
         cout << "Invalid device number " << n << "\n";
         return 0;
     }
-    if (context->devices[n].caps.size() <= dcap) {
+    if (context->devices[n].caps.size() <= (unsigned int)dcap) {
         cout << "Invalid device capability number " << dcap << "\n";
         return 0;
     }
