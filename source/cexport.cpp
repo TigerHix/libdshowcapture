@@ -139,7 +139,7 @@ int DSHOWCAPTURE_EXPORT get_json_length(void *cap) {
     }
     ss << "]";
     context->json = ss.str();
-    return (int)context->json.length();
+    return (int)context->json.length() + 1;
 }
 
 void DSHOWCAPTURE_EXPORT get_json(void *cap, char *buffer, int len) {
