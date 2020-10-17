@@ -115,12 +115,14 @@ int DSHOWCAPTURE_EXPORT get_json_length(void *cap) {
         ss << "\"name\": \"" << escape(WidestringToString(context->devices[dev].name)) << "\",";
         ss << "\"path\": \"" << escape(WidestringToString(context->devices[dev].path)) << "\",";
         ss << "\"caps\": [";
+        bool found = false;
         for (size_t dcap = 0; dcap < context->devices[dev].caps.size(); dcap++) {
             int rating = GetFormatRating(context->devices[dev].caps[dcap].format);
             if (rating >= 15)
                 continue;
-            if (dcap > 0)
+            if (found)
                 ss << ",";
+            found = true;
             ss << "{";
             ss << "\"id\": " << dcap << ",";
             ss << "\"minCX\": " << context->devices[dev].caps[dcap].minCX << ",";
