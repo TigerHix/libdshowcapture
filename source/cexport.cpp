@@ -224,8 +224,11 @@ int DSHOWCAPTURE_EXPORT capture_device_default(void *cap, int n) {
         return 0;
     context->capturing = context->device.Start() == Result::Success;
     long long unit = 10000000;
-    if (context->config.frameInterval == 0)
-        context->config.frameInterval = 1;
+    if (context->config.frameInterval == 0) {
+        context->device.Stop();
+        context->capturing = false;
+        return 0;
+    }
     cout << "Final camera configuration: " << context->config.cx << "x" << context->config.cy_abs << " " << unit / context->config.frameInterval << "\n";
     cout << "Format: " << (int)context->config.format << " Internal format: " << (int)context->config.internalFormat << "\n";
     return context->capturing;
@@ -311,8 +314,11 @@ int DSHOWCAPTURE_EXPORT capture_device_by_dcap(void *cap, int n, int dcap, int c
         return 0;
     context->capturing = context->device.Start() == Result::Success;
     long long unit = 10000000;
-    if (context->config.frameInterval == 0)
-        context->config.frameInterval = 1;
+    if (context->config.frameInterval == 0) {
+        context->device.Stop();
+        context->capturing = false;
+        return 0;
+    }
     cout << "Final camera configuration: " << context->config.cx << "x" << context->config.cy_abs << " " << unit / context->config.frameInterval << "\n";
     cout << "Format: " << (int)context->config.format << " Internal format: " << (int)context->config.internalFormat << "\n";
     return context->capturing;
