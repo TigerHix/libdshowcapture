@@ -31,9 +31,6 @@
 #include <cfgmgr32.h> // for CM_xxx
 #include <algorithm>  // for std::transform
 
-#pragma comment(lib, "winmm.lib")    // for waveInMessage
-#pragma comment(lib, "setupapi.lib") // for SetupDixxx
-
 using namespace std;
 
 namespace DShow {
@@ -657,59 +654,108 @@ static bool IsMonikerSameParentInstPath(IMoniker *moniker,
 		vidDevInstPath, vidParentDevInstPath,
 		_ARRAYSIZE(vidParentDevInstPath));
 
-	/* Get audio parent device instance path */
-	wchar_t audParentDevInstPath[512];
-	if (SUCCEEDED(hr))
-		hr = GetAudioCaptureParentDeviceInstancePath(
-			moniker, audParentDevInstPath,
-			_ARRAYSIZE(audParentDevInstPath));
-
-	/* Compare audio and video parent device instance path */
 	if (FAILED(hr))
 		return false;
 
+	/* Get audio parent device instance path */
+	wchar_t audParentDevInstPath[512];
+	hr = GetAudioCaptureParentDeviceInstancePath(
+		moniker, audParentDevInstPath,
+		_ARRAYSIZE(audParentDevInstPath));
+
+	if (FAILED(hr))
+		return false;
+
+	/* Compare audio and video parent device instance path */
 	return wcscmp(audParentDevInstPath, vidParentDevInstPath) == 0;
 }
 
-static bool IsElgatoDevice(const wchar_t *vidDevInstPath)
+#define VEN_ID_SIZE 4
+
+static inline bool MatchingStartToken(const wstring &path,
+				      const wstring &start_token)
+{
+	return path.find(start_token) == 0 &&
+	       path.size() >= start_token.size() + VEN_ID_SIZE;
+}
+
+static bool IsUncoupledDevice(const wchar_t *vidDevInstPath)
 {
 	/* Sanity checks */
 	if (!vidDevInstPath)
 		return false;
 
-	wstring path = vidDevInstPath;
+	const wstring path = vidDevInstPath;
 
 	/* USB */
-	wstring usbToken = L"USB\\VID_";
-	wstring usbVidElgato = L"0FD9";
+	const wstring usbToken = L"USB\\VID_";
+	const wstring usbVidIdWhitelist[] = {
+		L"0FD9", /* elgato */
+		L"3842", /* evga */
+		L"0B05", /* asus */
+		L"07CA", /* avermedia */
+		L"048D", /* digitnow/pengo */
+		L"04B4", /* mokose */
+		L"0557", /* aten */
+		L"1164", /* startek/kapchr */
+		L"1532", /* razer */
+		L"1BCF", /* mypin/treaslin/mirabox */
+		L"1E4E", /* pengo/cloneralliance */
+		L"1E71", /* nzxt */
+		L"2040", /* hauppauge */
+		L"2935", /* magewell */
+		L"298F", /* genki */
+		L"2B77", /* epiphan */
+		L"32ED", /* ezcap */
+		L"534D", /* brand-less/pacoxi/ucec */
+		L"EBA4", /* zasluke */
+	};
 
-	if (path.find(usbToken) == 0) {
-		if (path.size() >= usbToken.size() + usbVidElgato.size()) {
-
-			/* Get USB vendor ID */
-			wstring vid = path.substr(usbToken.size(),
-						  usbVidElgato.size());
-			if (vid == usbVidElgato)
+	if (MatchingStartToken(path, usbToken)) {
+		/* Get USB vendor ID */
+		const wstring vid = path.substr(usbToken.size(), VEN_ID_SIZE);
+		for (const wstring &whitelistId : usbVidIdWhitelist) {
+			if (vid == whitelistId) {
 				return true;
+			}
 		}
 	}
 
 	/* PCI */
-	wstring pciToken = L"PCI\\VEN_";
-	wstring pciSubsysToken = L"SUBSYS_";
-	wstring pciVidElgato = L"1CFA";
+	const wstring pciVenToken = L"PCI\\VEN_";
+	const wstring pciSubsysToken = L"SUBSYS_";
+	const wstring pciVenIdWhitelist[] = {
+		L"1CD7", /* magewell */
+		L"8888", /* acasis */
+		L"1461", /* avermedia */
+	};
+	const wstring pciSubsysIdWhitelist[] = {
+		L"1CFA", /* elgato */
+	};
 
-	if (path.find(pciToken) == 0) {
-		size_t pos = path.find(pciSubsysToken);
-		size_t devSize =
-			pos + pciSubsysToken.size() + 4; /* skip product ID*/
-		size_t expectedSize = devSize + pciVidElgato.size();
-
-		if (pos != string::npos && path.size() >= expectedSize) {
-			/* Get PCI subsystem vendor ID */
-			wstring vid = path.substr(devSize, pciVidElgato.size());
-			if (vid == pciVidElgato)
+	if (MatchingStartToken(path, pciVenToken)) {
+		const wstring vid = path.substr(usbToken.size(), VEN_ID_SIZE);
+		for (const wstring &whitelistId : pciVenIdWhitelist) {
+			if (vid == whitelistId) {
 				return true;
+			}
+		}
+
+		size_t subsysPos = path.find(pciSubsysToken);
+		size_t subsysIdPos =
+			subsysPos + pciSubsysToken.size() + VEN_ID_SIZE;
+		size_t expectedSize = subsysIdPos + VEN_ID_SIZE;
+
+		if (subsysPos != string::npos && path.size() >= expectedSize) {
+			/* Get PCI subsystem vendor ID */
+			const wstring ssid =
+				path.substr(subsysIdPos, VEN_ID_SIZE);
+			for (const wstring &whitelistId :
+			     pciSubsysIdWhitelist) {
+				if (ssid == whitelistId) {
+					return true;
+				}
+			}
 		}
 	}
 
@@ -754,21 +800,129 @@ static HRESULT ReadProperty(IMoniker *moniker, const wchar_t *property,
 	return hr;
 }
 
+static HRESULT GetFriendlyName(REFCLSID deviceClass, const wchar_t *devPath,
+			       wchar_t *name, int nameSize)
+{
+	/* Sanity checks */
+	if (!devPath)
+		return E_POINTER;
+	if (!name)
+		return E_POINTER;
+
+	/* Create device enumerator */
+	ComPtr<ICreateDevEnum> createDevEnum;
+	HRESULT hr = CoCreateInstance(CLSID_SystemDeviceEnum, NULL,
+				      CLSCTX_INPROC_SERVER, IID_ICreateDevEnum,
+				      (void **)&createDevEnum);
+
+	/* Enumerate filters */
+	ComPtr<IEnumMoniker> enumMoniker;
+	if (SUCCEEDED(hr)) {
+		/* returns S_FALSE if no devices are installed */
+		hr = createDevEnum->CreateClassEnumerator(deviceClass,
+							  &enumMoniker, 0);
+		if (!enumMoniker)
+			hr = E_FAIL;
+	}
+
+	/* Cycle through the enumeration */
+	if (SUCCEEDED(hr)) {
+		ULONG fetched = 0;
+		ComPtr<IMoniker> moniker;
+
+		enumMoniker->Reset();
+
+		while (enumMoniker->Next(1, &moniker, &fetched) == S_OK) {
+
+			/* Get device path from moniker */
+			wchar_t monikerDevPath[512];
+			hr = ReadProperty(moniker, L"DevicePath",
+					  monikerDevPath,
+					  _ARRAYSIZE(monikerDevPath));
+
+			/* Find desired filter */
+			if (wcscmp(devPath, monikerDevPath) == 0) {
+
+				/* Get friendly name */
+				hr = ReadProperty(moniker, L"FriendlyName",
+						  name, nameSize);
+				return hr;
+			}
+		}
+	}
+
+	return E_FAIL;
+}
+
+static bool MatchFriendlyNames(const wchar_t *vidName, const wchar_t *audName)
+{
+	/* Sanity checks */
+	if (!vidName)
+		return false;
+	if (!audName)
+		return false;
+
+	/* Convert strings to lower case */
+	wstring strVidName = vidName;
+	for (wchar_t &c : strVidName)
+		c = (wchar_t)tolower(c);
+	wstring strAudName = audName;
+	for (wchar_t &c : strAudName)
+		c = (wchar_t)tolower(c);
+
+	/* Remove 'video' from friendly name */
+	size_t posVid;
+	const wstring searchVid[] = {L"(video) ", L"(video)", L"video ",
+				     L"video",    L"hdmi",    L" / multiview"};
+	for (int i = 0; i < _ARRAYSIZE(searchVid); i++) {
+		const wstring &search = searchVid[i];
+		while ((posVid = strVidName.find(search)) !=
+		       std::string::npos) {
+			strVidName.replace(posVid, search.length(), L"");
+		}
+	}
+
+	/* Remove 'audio' from friendly name */
+	size_t posAud;
+	const wstring searchAud[] = {L"(audio) ", L"(audio)", L"audio ",
+				     L"audio"};
+	for (int i = 0; i < _ARRAYSIZE(searchAud); i++) {
+		const wstring &search = searchAud[i];
+		while ((posAud = strAudName.find(search)) !=
+		       std::string::npos) {
+			strAudName.replace(posAud, search.length(), L"");
+		}
+	}
+
+	return strVidName == strAudName;
+}
+
 static bool GetDeviceAudioFilterInternal(REFCLSID deviceClass,
 					 const wchar_t *vidDevPath,
-					 IBaseFilter **audioCaptureFilter)
+					 IBaseFilter **audioCaptureFilter,
+					 bool matchFilterName = false)
 {
 	/* Get video device instance path */
 	wchar_t vidDevInstPath[512];
 	HRESULT hr = DevicePathToDeviceInstancePath(vidDevPath, vidDevInstPath,
 						    _ARRAYSIZE(vidDevInstPath));
+	if (FAILED(hr))
+		return false;
 
-	/* Only enabled for Elgato devices for now to do not change behavior
-	 * for any other devices (e.g. webcams) */
 #if 1
-	if (!IsElgatoDevice(vidDevInstPath))
+	/* Only enabled for certain whitelisted devices for now */
+	if (!IsUncoupledDevice(vidDevInstPath))
 		return false;
 #endif
+
+	/* Get friendly name */
+	wchar_t vidName[512];
+	if (matchFilterName) {
+		hr = GetFriendlyName(CLSID_VideoInputDeviceCategory, vidDevPath,
+				     vidName, _ARRAYSIZE(vidName));
+		if (FAILED(hr))
+			return false;
+	}
 
 	/* Create device enumerator */
 	ComPtr<ICreateDevEnum> createDevEnum;
@@ -796,12 +950,6 @@ static bool GetDeviceAudioFilterInternal(REFCLSID deviceClass,
 
 		while (enumMoniker->Next(1, &moniker, &fetched) == S_OK) {
 			bool samePath = false;
-#if 0
-			/* Get friendly name (helpful for debugging) */
-			wchar_t friendlyName[512];
-			ReadProperty(moniker, L"FriendlyName", friendlyName,
-					_ARRAYSIZE(friendlyName));
-#endif
 
 			/* Get device path */
 			wchar_t audDevPath[512];
@@ -821,11 +969,29 @@ static bool GetDeviceAudioFilterInternal(REFCLSID deviceClass,
 
 			/* Get audio capture filter */
 			if (samePath) {
-				hr = moniker->BindToObject(
-					0, 0, IID_IBaseFilter,
-					(void **)audioCaptureFilter);
-				if (SUCCEEDED(hr))
-					return true;
+				/* Match video and audio filter names */
+				bool isSameFilterName = false;
+				if (matchFilterName) {
+					wchar_t audName[512];
+					hr = ReadProperty(moniker,
+							  L"FriendlyName",
+							  audName,
+							  _ARRAYSIZE(audName));
+					if (SUCCEEDED(hr)) {
+						isSameFilterName =
+							MatchFriendlyNames(
+								vidName,
+								audName);
+					}
+				}
+
+				if (!matchFilterName || isSameFilterName) {
+					hr = moniker->BindToObject(
+						0, 0, IID_IBaseFilter,
+						(void **)audioCaptureFilter);
+					if (SUCCEEDED(hr))
+						return true;
+				}
 			}
 		}
 	}
@@ -836,9 +1002,23 @@ static bool GetDeviceAudioFilterInternal(REFCLSID deviceClass,
 bool GetDeviceAudioFilter(const wchar_t *vidDevPath,
 			  IBaseFilter **audioCaptureFilter)
 {
-	/* Search in "Audio capture sources" */
+	/* Search in "Audio capture sources" and match filter name */
 	bool success = GetDeviceAudioFilterInternal(
-		CLSID_AudioInputDeviceCategory, vidDevPath, audioCaptureFilter);
+		CLSID_AudioInputDeviceCategory, vidDevPath, audioCaptureFilter,
+		true);
+
+	/* Search in "WDM Streaming Capture Devices" and match filter name */
+	if (!success)
+		success = GetDeviceAudioFilterInternal(KSCATEGORY_CAPTURE,
+						       vidDevPath,
+						       audioCaptureFilter,
+						       true);
+
+	/* Search in "Audio capture sources" */
+	if (!success)
+		success = GetDeviceAudioFilterInternal(
+			CLSID_AudioInputDeviceCategory, vidDevPath,
+			audioCaptureFilter);
 
 	/* Search in "WDM Streaming Capture Devices" */
 	if (!success)

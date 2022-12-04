@@ -28,6 +28,12 @@
 
 namespace DShow {
 
+/* device-vendor.cpp API */
+extern bool IsVendorVideoHDR(IKsPropertySet *propertySet);
+extern void SetVendorVideoFormat(IKsPropertySet *propertySet,
+				 bool hevcTrueAvcFalse);
+extern void SetVendorTonemapperUsage(IBaseFilter *filter, bool enable);
+
 bool SetRocketEnabled(IBaseFilter *encoder, bool enable);
 
 HDevice::HDevice() : initialized(false), active(false) {}
@@ -112,12 +118,31 @@ void HDevice::Receive(bool isVideo, IMediaSample *sample)
 	if (isVideo ? !videoConfig.callback : !audioConfig.callback)
 		return;
 
+	if (reactivatePending)
+		return;
+
 	/* auto-rotation for devices such as streamcam */
 	if (isVideo && rotatableDevice) {
 		ComQIPtr<IAMCameraControl> cc(videoFilter);
 		if (cc) {
 			long ccf = 0;
 			cc->Get(CameraControl_Roll, &roll, &ccf);
+		}
+	}
+
+	if (isVideo && videoConfig.reactivateCallback) {
+		ComQIPtr<IKsPropertySet> propertySet(videoFilter);
+		if (propertySet) {
+			const bool hdr = IsVendorVideoHDR(propertySet);
+			if (deviceHdrSignal != hdr) {
+				deviceHdrSignal = hdr;
+#ifdef ENABLE_HEVC
+				SetVendorVideoFormat(propertySet, hdr);
+#endif
+				videoConfig.reactivateCallback();
+				reactivatePending = true;
+				return;
+			}
 		}
 	}
 
@@ -326,6 +351,8 @@ bool HDevice::SetupVideoCapture(IBaseFilter *filter, VideoConfig &config)
 		info.expectedSubType = MEDIASUBTYPE_RGB32;
 	else if (videoConfig.format == VideoFormat::ARGB)
 		info.expectedSubType = MEDIASUBTYPE_ARGB32;
+	else if (videoConfig.format == VideoFormat::RGB24)
+		info.expectedSubType = MEDIASUBTYPE_RGB24;
 	else if (videoConfig.format == VideoFormat::YVYU)
 		info.expectedSubType = MEDIASUBTYPE_YVYU;
 	else if (videoConfig.format == VideoFormat::YUY2)
@@ -379,6 +406,18 @@ bool HDevice::SetVideoConfig(VideoConfig *config)
 		return false;
 	}
 
+	deviceHdrSignal = false;
+	reactivatePending = false;
+
+	ComPtr<IKsPropertySet> propertySet = ComQIPtr<IKsPropertySet>(filter);
+	if (propertySet) {
+		const bool hdr = IsVendorVideoHDR(propertySet);
+#ifdef ENABLE_HEVC
+		SetVendorVideoFormat(propertySet, hdr);
+#endif
+		deviceHdrSignal = hdr;
+	}
+
 	videoConfig = *config;
 
 	if (!SetupVideoCapture(filter, videoConfig))
@@ -414,6 +453,16 @@ bool HDevice::SetupExceptionAudioCapture(IPin *pin)
 	return false;
 }
 
+static bool is24BitAudio(AM_MEDIA_TYPE *mt)
+{
+	if (mt->formattype == FORMAT_WaveFormatEx) {
+		WAVEFORMATEX *wfex = (WAVEFORMATEX *)mt->pbFormat;
+		return wfex->wBitsPerSample == 24;
+	}
+
+	return false;
+}
+
 bool HDevice::SetupAudioCapture(IBaseFilter *filter, AudioConfig &config)
 {
 	ComPtr<IPin> pin;
@@ -434,7 +483,16 @@ bool HDevice::SetupAudioCapture(IBaseFilter *filter, AudioConfig &config)
 		MediaTypePtr defaultMT;
 
 		if (pinConfig && SUCCEEDED(pinConfig->GetFormat(&defaultMT))) {
-			audioMediaType = defaultMT;
+			if (is24BitAudio(defaultMT)) {
+				WAVEFORMATEX *wfex =
+					(WAVEFORMATEX *)defaultMT->pbFormat;
+				config.sampleRate = wfex->nSamplesPerSec;
+				config.channels = wfex->nChannels;
+				config.format = AudioFormat::Wave16bit;
+				config.useDefaultConfig = false;
+			} else {
+				audioMediaType = defaultMT;
+			}
 		} else {
 			if (!SetupExceptionAudioCapture(pin)) {
 				Error(L"Could not get default format for "
@@ -442,7 +500,9 @@ bool HDevice::SetupAudioCapture(IBaseFilter *filter, AudioConfig &config)
 				return false;
 			}
 		}
-	} else {
+	}
+
+	if (!config.useDefaultConfig) {
 		if (!GetClosestAudioMediaType(filter, config, audioMediaType)) {
 			Error(L"Could not get closest audio media type");
 			return false;
@@ -495,7 +555,7 @@ bool HDevice::SetupAudioOutput(IBaseFilter *filter, AudioConfig &config)
 	}
 
 	audioFilter = filter;
-	audioOutput = outputFilter;
+	audioOutput = std::move(outputFilter);
 
 	graph->AddFilter(audioOutput, L"Audio Output Filter");
 	if (!config.useVideoDevice)
@@ -715,6 +775,11 @@ bool HDevice::ConnectFilters()
 		return false;
 
 	if (videoCapture != NULL) {
+		/* use hardware tonemapper for narrow format (SDR), not wide (HDR) */
+		const bool enable_tonemapper = videoConfig.format !=
+					       VideoFormat::P010;
+		SetVendorTonemapperUsage(videoFilter, enable_tonemapper);
+
 		success = ConnectPins(PIN_CATEGORY_CAPTURE, MEDIATYPE_Video,
 				      videoFilter, videoCapture);
 		if (!success) {
@@ -807,4 +872,4 @@ void HDevice::Stop()
 	}
 }
 
-}; /* namespace DShow */
+} /* namespace DShow */

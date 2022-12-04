@@ -17,10 +17,11 @@
  *  USA
  */
 
-#include <strsafe.h>
 #include "output-filter.hpp"
 #include "dshow-formats.hpp"
 #include "log.hpp"
+
+#include <strsafe.h>
 
 namespace DShow {
 
@@ -29,8 +30,6 @@ namespace DShow {
 #else
 #define PrintFunc(x)
 #endif
-
-/* XXX: This is hardcoded for NV12/YV12/I420 */
 
 #define FILTER_NAME L"Output Filter"
 #define VIDEO_PIN_NAME L"Video Output"
@@ -348,6 +347,9 @@ STDMETHODIMP OutputPin::SetFormat(AM_MEDIA_TYPE *pmt)
 {
 	PrintFunc(L"OutputPin::SetFormat");
 
+	if (pmt == nullptr)
+		return VFW_E_INVALIDMEDIATYPE;
+
 	mt = pmt;
 
 	GetMediaTypeVFormat(mt, curVFormat);
@@ -431,9 +433,8 @@ bool OutputPin::AllocateBuffers(IPin *target, bool connecting)
 	int cx = vih->bmiHeader.biWidth;
 	int cy = vih->bmiHeader.biHeight;
 
-	/* TODO: Support formats, you know, other than video NV12/YV12 if
-	 * needed */
-	bufSize = cx * cy * 15 / 10;
+	WORD bits = VFormatBits(curVFormat);
+	bufSize = cx * cy * bits / 8;
 
 	ALLOCATOR_PROPERTIES props;
 
@@ -648,6 +649,7 @@ OutputFilter::OutputFilter(VideoFormat format, int cx, int cy,
 			   long long interval)
 	: refCount(0),
 	  state(State_Stopped),
+	  graph(nullptr),
 	  pin(new OutputPin(this, format, cx, cy, interval)),
 	  misc(new SourceMiscFlags)
 {
@@ -776,9 +778,17 @@ STDMETHODIMP OutputFilter::FindPin(LPCWSTR Id, IPin **ppPin)
 {
 	PrintFunc(L"OutputFilter::FindPin");
 
-	DSHOW_UNUSED(Id);
-	DSHOW_UNUSED(ppPin);
-	return E_NOTIMPL;
+	if (Id == nullptr || ppPin == nullptr)
+		return E_POINTER;
+
+	if (lstrcmpW(Id, OUTPUT_PIN_NAME) == 0) {
+		*ppPin = pin;
+		pin->AddRef();
+		return S_OK;
+	} else {
+		*ppPin = nullptr;
+		return VFW_E_NOT_FOUND;
+	}
 }
 
 STDMETHODIMP OutputFilter::QueryFilterInfo(FILTER_INFO *pInfo)

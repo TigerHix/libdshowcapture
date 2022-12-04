@@ -31,7 +31,7 @@
 
 #define DSHOWCAPTURE_VERSION_MAJOR 0
 #define DSHOWCAPTURE_VERSION_MINOR 8
-#define DSHOWCAPTURE_VERSION_PATCH 0
+#define DSHOWCAPTURE_VERSION_PATCH 7
 
 #define MAKE_DSHOWCAPTURE_VERSION(major, minor, patch) \
 	((major << 24) | (minor << 16) | (patch))
@@ -59,6 +59,8 @@ typedef std::function<void(const AudioConfig &config, unsigned char *data,
 			   size_t size, long long startTime, long long stopTime)>
 	AudioProc;
 
+typedef std::function<void()> ReactivateProc;
+
 enum class InitGraph {
 	False,
 	True,
@@ -79,12 +81,14 @@ enum class VideoFormat {
 	/* raw formats */
 	ARGB = 100,
 	XRGB,
+	RGB24,
 
 	/* planar YUV formats */
 	I420 = 200,
 	NV12,
 	YV12,
 	Y800,
+	P010,
 
 	/* packed YUV formats */
 	YVYU = 300,
@@ -95,6 +99,7 @@ enum class VideoFormat {
 	/* encoded formats */
 	MJPEG = 400,
 	H264,
+	HEVC,
 };
 
 enum class AudioFormat {
@@ -161,6 +166,7 @@ struct Config : DeviceId {
 
 struct VideoConfig : Config {
 	VideoProc callback;
+	ReactivateProc reactivateCallback;
 
 	/** Desired width/height of video. */
 	int cx = 0, cy_abs = 0;
